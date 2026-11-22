@@ -1,8 +1,9 @@
 """领域服务注册表：通用资源路由按模块 key 分派到独立业务服务。"""
 from __future__ import annotations
 
-from app.services.base import BaseModuleService
+from app.services.base import BaseModuleService, service_for
 from app.services.metric_definition import MetricDefinitionService
+from app.services.metric_archive import MetricArchiveService
 from app.services.dimension_model import DimensionModelService
 from app.services.query_builder import QueryBuilderService
 from app.services.data_service import DataServiceService
@@ -25,6 +26,7 @@ from app.services.field_lineage import FieldLineageService
 
 SERVICES: dict[str, BaseModuleService] = {
     "metric_definition": MetricDefinitionService(),
+    "metric_archive": MetricArchiveService(),
     "dimension_model": DimensionModelService(),
     "query_builder": QueryBuilderService(),
     "data_service": DataServiceService(),
@@ -47,5 +49,4 @@ SERVICES: dict[str, BaseModuleService] = {
 }
 
 
-def service_for(module: str) -> BaseModuleService | None:
-    return SERVICES.get(module)
+__all__ = ["SERVICES", "service_for", "BaseModuleService"]

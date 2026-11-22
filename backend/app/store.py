@@ -28,12 +28,31 @@ class Store:
         self._anomaly_records: list[dict[str, Any]] = []
         # Recalc history
         self._recalc_history: list[dict[str, Any]] = []
-        # Lock for thread safety
-        self._lock = threading.Lock()
+        # 指标下线记录的内部元数据：生效边界序号、命中的模板/服务 ID 等。
+        self._archive_meta: dict[int, dict[str, Any]] = {}
+        # 单调递增的生效边界；每次指标归档推进一格，调用方凭边界判断取数资格。
+        self._boundary_seq = 0
+        # 数据服务调用记录（含已结案与在途请求），归档后仍保留历史依据。
+        self._service_calls: list[dict[str, Any]] = []
+        # Lock for thread safety（可重入：归档流程会回调数据服务推进调用状态）
+        self._lock = threading.RLock()
 
     @property
     def lock(self):
         return self._lock
+
+    def reset(self) -> None:
+        """重置为种子数据：仅供测试隔离使用。"""
+        self._tables = {name: [dict(row) for row in rows]
+                        for name, rows in SEED_ROWS.items()}
+        self._cache.clear()
+        self._query_log.clear()
+        self._cohort_snapshots.clear()
+        self._anomaly_records.clear()
+        self._recalc_history.clear()
+        self._archive_meta.clear()
+        self._service_calls.clear()
+        self._boundary_seq = 0
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
@@ -175,6 +194,101 @@ class Store:
 
     def recalc_history(self) -> list[dict[str, Any]]:
         return self._recalc_history
+
+    # ── 指标归档 / 下线记录 / 生效边界 ──
+
+    def next_boundary(self) -> int:
+        """推进并返回一个新的生效边界序号。
+
+        每次指标归档独占一格边界。调用方在发起时记下当时边界，
+        取数时用「指标归档边界 <= 调用边界」判断是否允许继续取数：
+        归档前发起的调用可以按自己的边界继续跑完，归档后发起的调用一律拒绝。
+        """
+        self._boundary_seq += 1
+        return self._boundary_seq
+
+    def current_boundary(self) -> int:
+        return self._boundary_seq
+
+    def set_archive_meta(self, record_id: int, meta: dict[str, Any]) -> None:
+        self._archive_meta[record_id] = meta
+
+    def archive_meta(self, record_id: int) -> dict[str, Any]:
+        return self._archive_meta.get(record_id, {})
+
+    def metric_archive(self, metric_name: str) -> dict[str, Any] | None:
+        """返回指标当前生效的归档/下线记录（未归档返回 None）。"""
+        for row in self.rows("metric_archive"):
+            if (row.get("关联指标") == metric_name
+                    and row.get("status") == "已归档"):
+                return row
+        return None
+
+    def metric_offline_boundary(self, metric_name: str) -> int | None:
+        """指标下线生效边界；未下线返回 None。"""
+        record = self.metric_archive(metric_name)
+        if record is None:
+            return None
+        return self.archive_meta(int(record.get("id", 0))).get("boundary")
+
+    def is_metric_offline(self, metric_name: str, at_boundary: int | None = None) -> bool:
+        """判断指标在给定生效边界上是否已经下线。
+
+        ``at_boundary`` 省略表示「此刻」；取数动作一律按此刻判断，
+        「发起边界」只用于审计这次请求是在归档前还是归档后进来的。
+        """
+        boundary = self.metric_offline_boundary(metric_name)
+        if boundary is None:
+            return False
+        effective = self.current_boundary() if at_boundary is None else at_boundary
+        return boundary <= effective
+
+    # ── 数据服务调用记录 ──
+
+    def open_service_call(self, api: dict[str, Any], operator: str,
+                          templates: list[int]) -> dict[str, Any]:
+        """登记一次数据服务调用，记下发起的生效边界。"""
+        call = {
+            "id": len(self._service_calls) + 1,
+            "接口ID": api.get("id"),
+            "接口名称": api.get("接口名称"),
+            "关联指标": api.get("关联指标或模型", ""),
+            "操作人": operator,
+            "发起边界": self.current_boundary(),
+            "状态": "计算中",
+            "已完成模板": [],
+            "待执行模板": list(templates),
+            "已放弃模板": [],
+            "口径": {},
+            "明细": [],
+            "结尾原因": "",
+            "发起时间": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "结案时间": "",
+        }
+        self._service_calls.append(call)
+        return call
+
+    def finish_service_call(self, call: dict[str, Any], status: str,
+                            reason: str = "") -> dict[str, Any]:
+        call["状态"] = status
+        call["结尾原因"] = reason
+        call["结案时间"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        return call
+
+    def orphan_pending_templates(self, call: dict[str, Any]) -> list[dict[str, Any]]:
+        """返回在途调用里已放弃的模板，并保证调用记录可序列化。"""
+        return list(call.get("待执行模板", []))
+
+    def service_calls(self, api_id: int | None = None) -> list[dict[str, Any]]:
+        if api_id is None:
+            return list(self._service_calls)
+        return [call for call in self._service_calls if call.get("接口ID") == api_id]
+
+    def open_calls_for_metric(self, metric_name: str) -> list[dict[str, Any]]:
+        return [
+            call for call in self._service_calls
+            if call.get("关联指标") == metric_name and call.get("状态") == "计算中"
+        ]
 
     # ── Data artifacts for cross-module consumption ──
 

@@ -38,6 +38,17 @@ class QueryBuilderService(BaseModuleService):
         if not metric_name:
             return {"error": "查询模板未关联指标"}
 
+        # 下线边界检查：指标归档后，任何新的取数请求都不允许再执行。
+        # 这一步放在缓存之前，归档时已失效过缓存，避免从旧缓存里取到已下线指标。
+        if store.is_metric_offline(metric_name):
+            record = store.metric_archive(metric_name) or {}
+            return {
+                "error": f"指标 {metric_name} 已归档（下线记录 #{record.get('id')}），不再接受计算",
+                "code": "metric_offline",
+                "metric": metric_name,
+                "archive_id": record.get("id"),
+            }
+
         # 检查指标口径版本
         calibers = store.find_by_field("caliber_version", "所属指标", metric_name)
         active_caliber = next((c for c in calibers if c.get("status") == "已生效"), None)

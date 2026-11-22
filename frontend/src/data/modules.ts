@@ -14,6 +14,17 @@ export const MODULES: ModuleMeta[] = [
     metrics: ["指标总数", "已发布指标", "覆盖业务域"],
   },
   {
+    key: "metric_archive",
+    name: "指标发布归档",
+    entity: "指标下线记录",
+    desc: "登记指标下线记录、核对模板引用并通知数据服务停止接受新计算",
+    fields: ["关联指标", "下线原因", "生效边界", "影响模板数", "在途调用数", "登记人", "登记时间"],
+    statuses: ["待生效", "已归档"],
+    actions: [],
+    actionTargets: {},
+    metrics: ["下线记录数", "已归档指标", "推进在途调用"],
+  },
+  {
     key: "dimension_model",
     name: "维度建模",
     entity: "维度模型",

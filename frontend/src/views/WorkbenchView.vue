@@ -6,7 +6,13 @@
         <p class="page-desc">{{ meta.desc }}</p>
       </div>
       <div class="page-actions">
-        <button class="btn primary" data-testid="open-create" type="button" @click="openCreate">
+        <button
+          v-if="meta.key !== 'metric_archive'"
+          class="btn primary"
+          data-testid="open-create"
+          type="button"
+          @click="openCreate"
+        >
           登记{{ meta.entity }}
         </button>
         <button class="btn" data-testid="export" type="button" @click="exportRows">
@@ -60,6 +66,15 @@
             >
               {{ action }}
             </button>
+            <button
+              v-if="meta.key === 'metric_definition'"
+              class="link"
+              type="button"
+              :data-testid="`archive-${row.id}`"
+              @click="openArchive(row)"
+            >
+              发布指标归档
+            </button>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -86,6 +101,31 @@
       </form>
     </div>
 
+    <div v-if="showArchive" class="modal-backdrop" data-testid="archive-modal">
+      <form class="modal" @submit.prevent="submitArchive">
+        <h3>发布指标归档</h3>
+        <p class="page-desc">
+          {{ archiveRow?.指标名称 }} 将被登记为指标下线记录；引用它的模板会在下方列出，
+          数据服务随即停止接受新计算。
+        </p>
+        <label class="create-field">
+          <span>下线原因</span>
+          <input v-model="archiveReason" data-testid="archive-reason" required />
+        </label>
+        <div v-if="referenceSummary" class="status-legend">
+          <span class="legend-item">查询模板：{{ referenceSummary.query_templates.length }}</span>
+          <span class="legend-item">报告模板：{{ referenceSummary.report_templates.length }}</span>
+          <span class="legend-item">数据服务：{{ referenceSummary.data_services.length }}</span>
+        </div>
+        <div class="page-actions">
+          <button class="btn" type="button" @click="showArchive = false">取消</button>
+          <button class="btn primary" data-testid="submit-archive" type="submit" :disabled="archiving">
+            {{ archiving ? '归档中…' : '确认归档' }}
+          </button>
+        </div>
+      </form>
+    </div>
+
     <footer class="page-foot">
       <span>共 {{ total }} 条{{ meta.name }}记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
@@ -97,9 +137,11 @@
 import { computed, onMounted, ref } from 'vue'
 
 import {
+  archiveMetric,
   createEntry,
   downloadEntries,
   listEntries,
+  metricReferences,
   moduleMeta,
   runAction as applyAction,
 } from '@/api/backend-service'
@@ -115,6 +157,16 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+const showArchive = ref(false)
+const archiving = ref(false)
+const archiveRow = ref<EntryRow | null>(null)
+const archiveReason = ref('')
+type ReferenceSummary = {
+  query_templates: unknown[]
+  report_templates: unknown[]
+  data_services: unknown[]
+}
+const referenceSummary = ref<ReferenceSummary | null>(null)
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
   { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
@@ -173,6 +225,36 @@ async function runAction(action: string, row: EntryRow) {
     await reload()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '操作失败'
+  }
+}
+
+async function openArchive(row: EntryRow) {
+  errorMessage.value = ''
+  archiveRow.value = row
+  archiveReason.value = '运营发起指标下线'
+  referenceSummary.value = null
+  showArchive.value = true
+  try {
+    const refs = await metricReferences(String(row['指标名称'] ?? ''))
+    referenceSummary.value = refs as unknown as ReferenceSummary
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '引用面查询失败'
+  }
+}
+
+async function submitArchive() {
+  if (!archiveRow.value) return
+  archiving.value = true
+  errorMessage.value = ''
+  try {
+    const result = await archiveMetric(Number(archiveRow.value.id), archiveReason.value)
+    if (!result.ok) throw new Error(result.message)
+    showArchive.value = false
+    await reload()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '归档失败'
+  } finally {
+    archiving.value = false
   }
 }
 

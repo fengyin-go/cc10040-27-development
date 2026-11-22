@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.services.metric_definition import MetricDefinitionService
+from app.services.metric_archive import MetricArchiveService
 from app.services.caliber_version import CaliberVersionService
 from app.services.query_builder import QueryBuilderService
 from app.services.data_service import DataServiceService
@@ -68,10 +69,65 @@ def execute_query(template_id: int, operator: str = "系统"):
 
 
 @router.post("/data-service/{api_id}/call")
-def call_data_service(api_id: int, operator: str = "客户端"):
-    """调用数据服务API"""
+def call_data_service(
+    api_id: int,
+    operator: str = "客户端",
+    templates: str | None = None,
+    halt_before_template: int | None = None,
+    resume_call_id: int | None = None,
+    hold_open: bool = False,
+):
+    """调用数据服务API。
+
+    * ``templates``：逗号分隔的模板 ID，指定多份模板的执行顺序；
+    * ``halt_before_template``：在指定模板执行前模拟一次指标归档，用于核对在途请求；
+    * ``resume_call_id``：继续一次尚未结案的在途调用；
+    * ``hold_open``：执行完当前模板后把调用保持在途，便于跨请求观察归档效果。
+    """
+    sequence = None
+    if templates:
+        try:
+            sequence = [int(item) for item in templates.split(",") if item.strip()]
+        except ValueError:
+            return {"error": f"templates 需要逗号分隔的模板 ID：{templates}"}
     svc = DataServiceService()
-    return svc.call_service(api_id, operator=operator)
+    return svc.call_service(api_id, operator=operator,
+                            template_sequence=sequence,
+                            halt_before_template=halt_before_template,
+                            resume_call_id=resume_call_id,
+                            hold_open=hold_open)
+
+
+@router.get("/data-service/{api_id}/calls")
+def list_data_service_calls(api_id: int):
+    """查询数据服务调用记录（含已结案与在途请求的历史依据）"""
+    svc = DataServiceService()
+    return svc.list_calls(api_id)
+
+
+# ── 指标发布归档 / 下线记录 ──
+
+@router.post("/metric/{metric_id}/archive")
+def archive_metric(metric_id: int, reason: str = "运营发起指标下线",
+                   operator: str = "运营"):
+    """发布指标归档：查询引用模板、登记下线记录并通知数据服务"""
+    svc = MetricArchiveService()
+    result, msg = svc.archive_metric(metric_id, reason=reason, operator=operator)
+    return {"ok": result is not None, "message": msg, "entry": result}
+
+
+@router.get("/metric/{metric_name}/references")
+def metric_references(metric_name: str):
+    """查询指标被哪些查询模板 / 报告模板 / 数据服务引用"""
+    svc = MetricArchiveService()
+    return svc.find_references(metric_name)
+
+
+@router.get("/metric-archive/{metric_name}")
+def get_metric_archive(metric_name: str):
+    """查询指标的下线记录与生效边界"""
+    svc = MetricArchiveService()
+    return svc.get_archive(metric_name) or {"error": f"指标 {metric_name} 未归档"}
 
 
 @router.get("/data-service/{api_id}/health")
@@ -299,6 +355,7 @@ def full_chain_snapshot():
                 "caliber_version": CaliberVersionService().domain_snapshot(),
                 "query_builder": QueryBuilderService().domain_snapshot(),
                 "data_service": DataServiceService().domain_snapshot(),
+                "metric_archive": MetricArchiveService().domain_snapshot(),
                 "cache_layer": CacheLayerService().domain_snapshot(),
                 "query_journal": QueryJournalService().domain_snapshot(),
             },

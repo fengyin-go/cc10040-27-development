@@ -6,6 +6,25 @@ from typing import Any
 from app.store import store
 
 
+def service_for(module: str) -> "BaseModuleService | None":
+    """按模块 key 取服务实例。
+
+    定义在 base 里供领域服务互相回调，避免 ``app.services`` 包在初始化时
+    形成循环导入；注册表本身仍在 ``app.services.__init__``。
+    """
+    from app.services import SERVICES
+    return SERVICES.get(module)
+
+
+def metric_of_query_template(template: dict[str, Any]) -> str:
+    return str(template.get("关联指标", ""))
+
+
+def metric_of_report_template(template: dict[str, Any]) -> list[str]:
+    raw = str(template.get("包含指标集", ""))
+    return [name.strip() for name in raw.split(",") if name.strip()]
+
+
 class BaseModuleService:
     MODULE = ""
     ENTITY = ""

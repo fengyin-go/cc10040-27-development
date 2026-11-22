@@ -59,3 +59,37 @@ export async function loadOverview(): Promise<OverviewResult> {
   if (!response.ok) throw new Error('运营概览读取失败')
   return await response.json()
 }
+
+export type MetricArchiveResult = {
+  ok: boolean
+  message: string
+  entry?: EntryRow | null
+}
+
+export async function archiveMetric(
+  metricId: number,
+  reason: string,
+): Promise<MetricArchiveResult> {
+  const query = new URLSearchParams({ reason })
+  const response = await request(`/api/cross/metric/${metricId}/archive?${query}`, {
+    method: 'POST',
+  })
+  if (!response.ok) throw new Error('指标归档失败')
+  return await response.json()
+}
+
+export async function metricReferences(metricName: string): Promise<Record<string, unknown>> {
+  const response = await request(
+    `/api/cross/metric/${encodeURIComponent(metricName)}/references`,
+  )
+  if (!response.ok) throw new Error('引用面查询失败')
+  return await response.json()
+}
+
+export async function loadMetricArchive(metricName: string): Promise<Record<string, unknown>> {
+  const response = await request(
+    `/api/cross/metric-archive/${encodeURIComponent(metricName)}`,
+  )
+  if (!response.ok) throw new Error('下线记录读取失败')
+  return await response.json()
+}

@@ -38,6 +38,20 @@ class ReportTemplateService(BaseModuleService):
 
         sections = []
         for metric_name in metric_names:
+            # 指标归档后，报告模板不能再借查询构建器取数；该指标整段标注为不可用。
+            archive = store.metric_archive(metric_name)
+            if archive is not None:
+                sections.append({
+                    "metric": metric_name,
+                    "available": False,
+                    "metric_status": "已归档",
+                    "archive_id": archive.get("id"),
+                    "query_results_count": 0,
+                    "query_results": [],
+                    "note": "指标已归档，报告不再取数；历史报告依据请查下线记录",
+                })
+                continue
+
             # 获取查询结果
             queries = store.find_by_field("query_builder", "关联指标", metric_name)
             query_results = []
@@ -62,6 +76,7 @@ class ReportTemplateService(BaseModuleService):
 
             sections.append({
                 "metric": metric_name,
+                "available": True,
                 "caliber_version": active_caliber.get("版本号") if active_caliber else "未知",
                 "caliber_desc": active_caliber.get("口径描述") if active_caliber else "未知",
                 "query_results_count": len(query_results),
@@ -75,4 +90,5 @@ class ReportTemplateService(BaseModuleService):
             "format": template.get("输出格式", "HTML"),
             "sections": sections,
             "total_metrics": len(sections),
+            "unavailable_metrics": sum(1 for s in sections if not s.get("available")),
         }
